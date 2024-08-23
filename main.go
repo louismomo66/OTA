@@ -29,7 +29,7 @@ type VersionInfo struct {
 }
 
 var mu sync.Mutex
-var selectedVersion string
+
 var deviceVersions = make(map[string]VersionInfo) // Map to store the selected version for each device
 
 func uploadFile(w http.ResponseWriter, r *http.Request) {
@@ -48,8 +48,8 @@ func uploadFile(w http.ResponseWriter, r *http.Request) {
 	fmt.Printf("File Size: %+v\n", handler.Size)
 	fmt.Printf("MIME Header: %+v\n", handler.Header.Get("Content-Type"))
 
-	// Record the current date and time
-	uploadTime := time.Now().Format("2006-01-02 15:04:05")
+	// Record the current date and time in ISO 8601 format with milliseconds
+	uploadTime := time.Now().Format("2006-01-02T15:04:05.000Z")
 
 	tempFile, err := os.Create(filepath.Join("uploads", handler.Filename))
 	if err != nil {
@@ -266,18 +266,46 @@ func listFiles(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(files)
 }
 
+// func selectVersion(w http.ResponseWriter, r *http.Request) {
+// 	vars := mux.Vars(r)
+// 	version, ok := vars["version"]
+// 	if !ok {
+// 		http.Error(w, "Version not provided in the URL", http.StatusBadRequest)
+// 		return
+// 	}
+
+// 	// Extract the IMEI from the request header
+// 	imei := r.Header.Get("X-Device-IMEI")
+// 	if imei == "" {
+// 		http.Error(w, "IMEI not provided", http.StatusBadRequest)
+// 		return
+// 	}
+
+// 	mu.Lock()
+// 	defer mu.Unlock()
+
+// 	// Store the selected version and IMEI in the map
+// 	deviceVersions[imei] = VersionInfo{
+// 		Version: version,
+// 		IMEI:    imei,
+// 	}
+
+// 	fmt.Printf("Selected version for IMEI %s: %s\n", imei, version)
+
+// 	fmt.Fprint(w, "Version selected successfully")
+// }
 func selectVersion(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
+
+	// Extract version and IMEI from the URL parameters
 	version, ok := vars["version"]
 	if !ok {
 		http.Error(w, "Version not provided in the URL", http.StatusBadRequest)
 		return
 	}
-
-	// Extract the IMEI from the request header
-	imei := r.Header.Get("X-Device-IMEI")
-	if imei == "" {
-		http.Error(w, "IMEI not provided", http.StatusBadRequest)
+	imei, ok := vars["imei"]
+	if !ok {
+		http.Error(w, "IMEI not provided in the URL", http.StatusBadRequest)
 		return
 	}
 
@@ -291,9 +319,9 @@ func selectVersion(w http.ResponseWriter, r *http.Request) {
 	}
 
 	fmt.Printf("Selected version for IMEI %s: %s\n", imei, version)
-
 	fmt.Fprint(w, "Version selected successfully")
 }
+
 func getUploadedFiles(uploadDir string) ([]FileInfo, error) {
 	var files []FileInfo
 
@@ -324,25 +352,94 @@ func getUploadedFiles(uploadDir string) ([]FileInfo, error) {
 
 	return files, nil
 }
+func deleteFile(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	filename := vars["filename"]
+	if filename == "" {
+		http.Error(w, "Filename not provided", http.StatusBadRequest)
+		return
+	}
+
+	filePath := filepath.Join("uploads", filename)
+	err := os.Remove(filePath)
+	if err != nil {
+		http.Error(w, "Error deleting file", http.StatusInternalServerError)
+		return
+	}
+
+	// Optionally, delete the associated .time file
+	timeFilePath := filePath + ".time"
+	os.Remove(timeFilePath) // We ignore the error here as it is not critical
+
+	fmt.Fprintf(w, "File %s deleted successfully", filename)
+}
+
 func main() {
+
+	var broker = "localhost"
+	var port = 1883
+	fmt.Println("Starting application")
+
+	// Initialize MQTT service
+	mqttService, err := NewMQTTClient(port, broker, "", "")
+	if err != nil {
+		panic(err)
+	}
+
+	topic := "switch/message"
+	// Channel for receiving subscribed messages
+	respDataChan := make(chan []byte)
+
+	// Start the subscription goroutine
+	go func() {
+		if err := mqttService.Subscribe(topic, respDataChan); err != nil {
+			fmt.Printf("Error subscribing: %v\n", err)
+		}
+	}()
+
+	// go func() {
+	// 	for {
+	// 		var input string
+	// 		fmt.Print("Enter message to publish (or type 'exit' to quit): ")
+	// 		fmt.Scanf("%s", &input)
+
+	// 		// Exit the loop if the user types 'exit'
+	// 		if input == "exit" {
+	// 			close(respDataChan)
+	// 			break
+	// 		}
+
+	// 		// Publish the user's message to the MQTT topic
+	// 		message, _ := json.Marshal(&publishMessage{Message: input})
+	// 		if err := mqttService.Publish(topic, message); err != nil {
+	// 			fmt.Println("Error publishing:", err)
+	// 		}
+	// 		time.Sleep(time.Second)
+	// 	}
+	// }()
 	r := mux.NewRouter()
-    r.HandleFunc("/upload", uploadFile).Methods("POST")
-    r.HandleFunc("/list", listFiles).Methods("GET")
-    r.HandleFunc("/select/{version:[0-9.]+}", selectVersion).Methods("POST")
-    r.HandleFunc("/{filename}/{version:[0-9.]+}/{imei}", serveFileWithProgress).Methods("GET")
+	r.HandleFunc("/upload", uploadFile).Methods("POST")
+	r.HandleFunc("/list", listFiles).Methods("GET")
+	r.HandleFunc("/select/{version:[0-9.]+}/{imei:[0-9]+}", selectVersion).Methods("POST")
+	r.HandleFunc("/{filename}/{version:[0-9.]+}/{imei}", serveFileWithProgress).Methods("GET")
+	r.HandleFunc("/delete/{filename}", deleteFile).Methods("DELETE")
 
 
     // CORS configuration
     corsOptions := handlers.CORS(
-        handlers.AllowedOrigins([]string{"http://localhost:3000"}),
+        handlers.AllowedOrigins([]string{"*"}),
         handlers.AllowedMethods([]string{"GET", "POST", "PUT", "DELETE", "OPTIONS"}),
-        handlers.AllowedHeaders([]string{"Content-Type", "X-Device-IMEI"}),
+		handlers.AllowedHeaders([]string{"Content-Type", "ngrok-skip-browser-warning","X-Device-IMEI"}), // Include your custom header here
+        // handlers.AllowCredentials(),
     )
 
     // Apply the CORS middleware
-    http.ListenAndServe(":9000", corsOptions(r))
-
-    log.Println("Listening on 9000...")
+    go http.ListenAndServe(":9000", corsOptions(r))
+	log.Println("Listening on 9000...")
+	for msg := range respDataChan {
+		fmt.Printf("Received MQTT message: %s\n", string(msg))
+	}
+	close(respDataChan)
 }
 
 //send the flag with the imei,timestamp
