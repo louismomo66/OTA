@@ -309,7 +309,8 @@ function App() {
 
   // Handle selecting a file and sending the version and IMEI to the backend
   const selectFile = (fileName, version, imei) => {
-    fetch(`http://localhost:9000/select/${version}/${imei}`, {
+    const baseFileName = fileName.split('_')[0];
+    fetch(`http://localhost:9000/select/${version}/${imei}/${encodeURIComponent(baseFileName)}`, {
       method: "POST",
     })
     .then((response) => {
@@ -361,7 +362,7 @@ function App() {
           <option value="">-- Select a Device --</option>
           <option value="123456789012345">Device 1 (IMEI: 123456789012345)</option>
           <option value="987654321098765">Device 2 (IMEI: 987654321098765)</option>
-          <option value="112233445566778">Device 3 (IMEI: 112233445566778)</option>
+          <option value="860470062578590">Device 3 (IMEI: 860470062578590)</option>
         </select>
       </div>
 

@@ -26,6 +26,7 @@ type FileInfo struct {
 type VersionInfo struct {
 	Version string
 	IMEI    string
+	FileName string
 }
 
 var mu sync.Mutex
@@ -79,33 +80,147 @@ func uploadFile(w http.ResponseWriter, r *http.Request) {
 
 // var lastServedVersion string
 
-func findFileByVersion(requestedVersion string) string {
-	files, err := filepath.Glob(filepath.Join("uploads", "esp32_"+requestedVersion+".bin"))
+// func findFileByVersion(requestedVersion string) string {
+// 	files, err := filepath.Glob(filepath.Join("uploads", "esp32_"+requestedVersion+".bin"))
+// 	// files, err := filepath.Glob(filepath.Join("uploads", "*"+requestedVersion+"*.bin"))
+// 	if err != nil {
+// 		return ""
+// 	}
+
+// 	if len(files) > 0 {
+// 		return filepath.Base(files[0])
+// 	}
+// 	return ""
+// }
+func findFileByVersion(fileNameWithoutVersion, requestedVersion string) string {
+	// Use a wildcard to match the file with any name but containing the specific version
+	pattern := filepath.Join("uploads", fileNameWithoutVersion+"_"+requestedVersion+"*.bin")
+	files, err := filepath.Glob(pattern)
 	if err != nil {
 		return ""
 	}
 
+	// If matching files are found, return the first one
 	if len(files) > 0 {
 		return filepath.Base(files[0])
 	}
+
+	// Return an empty string if no matching file is found
 	return ""
 }
 
+// func serveFileWithProgress(w http.ResponseWriter, r *http.Request) {
+//     fmt.Println("update begun.....")
+//     vars := mux.Vars(r)
+
+//     requestedVersion, ok := vars["version"]
+//     if !ok {
+//         http.Error(w, "Version not provided in the URL", http.StatusBadRequest)
+//         return
+//     }
+
+//     imei, ok := vars["imei"]
+//     if !ok || imei == "" {
+//         http.Error(w, "IMEI not provided in the URL", http.StatusBadRequest)
+//         return
+//     }
+
+//     mu.Lock()
+//     defer mu.Unlock()
+
+//     // Retrieve the version information for the given IMEI
+//     versionInfo, exists := deviceVersions[imei]
+//     if !exists {
+//         http.Error(w, "No version selected for this IMEI", http.StatusBadRequest)
+//         return
+//     }
+
+//     if versionInfo.Version != requestedVersion {
+//         filename := findFileByVersion(versionInfo.Version)
+//         if filename == "" {
+//             http.Error(w, "Requested version not found", http.StatusNotFound)
+//             return
+//         }
+
+//         filePath := filepath.Join("uploads", filename)
+//         file, err := os.Open(filePath)
+//         if err != nil {
+//             http.Error(w, "Error opening file", http.StatusInternalServerError)
+//             return
+//         }
+//         defer file.Close()
+
+//         fi, err := file.Stat()
+//         if err != nil {
+//             http.Error(w, "Error getting file information", http.StatusInternalServerError)
+//             return
+//         }
+
+//         w.Header().Set("Content-Disposition", "attachment; filename="+filename)
+//         w.Header().Set("Content-Type", "application/octet-stream")
+//         w.Header().Set("Content-Length", strconv.FormatInt(fi.Size(), 10))
+
+//         const bufferSize = 8192
+//         buffer := make([]byte, bufferSize)
+
+//         totalBytesRead := int64(0)
+
+//         for {
+//             n, err := file.Read(buffer)
+//             if err == io.EOF {
+//                 break
+//             } else if err != nil {
+//                 http.Error(w, "Error reading file", http.StatusInternalServerError)
+//                 return
+//             }
+
+//             _, err = w.Write(buffer[:n])
+//             if err != nil {
+//                 return
+//             }
+
+//             totalBytesRead += int64(n)
+
+//             if flusher, ok := w.(http.Flusher); ok {
+//                 flusher.Flush()
+//             }
+//         }
+//         log.Printf("Download of %s completed: %d bytes\n", filename, totalBytesRead)
+//     } else {
+//         errorMessage := "Firmware is up to date. No update required."
+//         http.Error(w, errorMessage, http.StatusBadRequest)
+//         fmt.Fprintf(w, "%s", errorMessage)
+//         return
+//     }
+// }
 func serveFileWithProgress(w http.ResponseWriter, r *http.Request) {
-    fmt.Println("update begun.....")
+    fmt.Println("Update begun...")
+
+    // Extract variables from the URL
     vars := mux.Vars(r)
 
+    // Extract the requested version from the URL
     requestedVersion, ok := vars["version"]
     if !ok {
         http.Error(w, "Version not provided in the URL", http.StatusBadRequest)
         return
     }
 
+    // Extract the IMEI from the URL
     imei, ok := vars["imei"]
     if !ok || imei == "" {
         http.Error(w, "IMEI not provided in the URL", http.StatusBadRequest)
         return
     }
+
+    // Extract the base file name from the URL
+    baseFileName, ok := vars["filename"]
+    if !ok || baseFileName == "" {
+        http.Error(w, "Base file name not provided in the URL", http.StatusBadRequest)
+        return
+    }
+
+
 
     mu.Lock()
     defer mu.Unlock()
@@ -116,64 +231,81 @@ func serveFileWithProgress(w http.ResponseWriter, r *http.Request) {
         http.Error(w, "No version selected for this IMEI", http.StatusBadRequest)
         return
     }
+	
+	
 
-    if versionInfo.Version != requestedVersion {
-        filename := findFileByVersion(versionInfo.Version)
-        if filename == "" {
-            http.Error(w, "Requested version not found", http.StatusNotFound)
-            return
-        }
-
-        filePath := filepath.Join("uploads", filename)
-        file, err := os.Open(filePath)
-        if err != nil {
-            http.Error(w, "Error opening file", http.StatusInternalServerError)
-            return
-        }
-        defer file.Close()
-
-        fi, err := file.Stat()
-        if err != nil {
-            http.Error(w, "Error getting file information", http.StatusInternalServerError)
-            return
-        }
-
-        w.Header().Set("Content-Disposition", "attachment; filename="+filename)
-        w.Header().Set("Content-Type", "application/octet-stream")
-        w.Header().Set("Content-Length", strconv.FormatInt(fi.Size(), 10))
-
-        const bufferSize = 8192
-        buffer := make([]byte, bufferSize)
-
-        totalBytesRead := int64(0)
-
-        for {
-            n, err := file.Read(buffer)
-            if err == io.EOF {
-                break
-            } else if err != nil {
-                http.Error(w, "Error reading file", http.StatusInternalServerError)
-                return
-            }
-
-            _, err = w.Write(buffer[:n])
-            if err != nil {
-                return
-            }
-
-            totalBytesRead += int64(n)
-
-            if flusher, ok := w.(http.Flusher); ok {
-                flusher.Flush()
-            }
-        }
-        log.Printf("Download of %s completed: %d bytes\n", filename, totalBytesRead)
-    } else {
+    // Check if the firmware is already up to date
+    if versionInfo.Version == requestedVersion {
         errorMessage := "Firmware is up to date. No update required."
         http.Error(w, errorMessage, http.StatusBadRequest)
         fmt.Fprintf(w, "%s", errorMessage)
         return
     }
+
+	//check if the file names match
+	if versionInfo.FileName != baseFileName{
+		errorMessage1 := "FileNames donot match."
+		http.Error(w, errorMessage1, http.StatusBadRequest)
+		fmt.Fprintf(w, "%s", errorMessage1)
+		return
+	}
+	
+    // Use the updated findFileByVersion function to search for the file using the baseFileName and requestedVersion
+    filename := findFileByVersion(baseFileName, versionInfo.Version)
+    if filename == "" {
+        http.Error(w, "Requested version not found", http.StatusNotFound)
+        return
+    }
+
+    filePath := filepath.Join("uploads", filename)
+    file, err := os.Open(filePath)
+    if err != nil {
+        http.Error(w, "Error opening file", http.StatusInternalServerError)
+        return
+    }
+    defer file.Close()
+
+    // Get the file size information
+    fi, err := file.Stat()
+    if err != nil {
+        http.Error(w, "Error getting file information", http.StatusInternalServerError)
+        return
+    }
+
+    // Set headers for the file download
+    w.Header().Set("Content-Disposition", "attachment; filename="+filename)
+    w.Header().Set("Content-Type", "application/octet-stream")
+    w.Header().Set("Content-Length", strconv.FormatInt(fi.Size(), 10))
+
+    const bufferSize = 8192
+    buffer := make([]byte, bufferSize)
+    totalBytesRead := int64(0)
+
+    // Stream the file in chunks
+    for {
+        n, err := file.Read(buffer)
+        if err == io.EOF {
+            break
+        } else if err != nil {
+            http.Error(w, "Error reading file", http.StatusInternalServerError)
+            return
+        }
+
+        _, err = w.Write(buffer[:n])
+        if err != nil {
+            return
+        }
+
+        totalBytesRead += int64(n)
+
+        // Flush the buffer to ensure data is sent to the client immediately
+        if flusher, ok := w.(http.Flusher); ok {
+            flusher.Flush()
+        }
+    }
+
+    // Log the completion of the download
+    log.Printf("Download of %s completed: %d bytes\n", filename, totalBytesRead)
 }
 
 
@@ -308,6 +440,11 @@ func selectVersion(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "IMEI not provided in the URL", http.StatusBadRequest)
 		return
 	}
+	fileName, ok := vars["filename"]
+	if !ok {
+		http.Error(w, "Filename not provided in the URL", http.StatusBadRequest)
+		return
+	}
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -316,9 +453,10 @@ func selectVersion(w http.ResponseWriter, r *http.Request) {
 	deviceVersions[imei] = VersionInfo{
 		Version: version,
 		IMEI:    imei,
+		FileName: fileName,
 	}
 
-	fmt.Printf("Selected version for IMEI %s: %s\n", imei, version)
+	fmt.Printf("Selected file %s of version %s with IMEI %s\n", fileName,version, imei)
 	fmt.Fprint(w, "Version selected successfully")
 }
 
@@ -376,26 +514,26 @@ func deleteFile(w http.ResponseWriter, r *http.Request) {
 
 func main() {
 
-	var broker = "localhost"
-	var port = 1883
-	fmt.Println("Starting application")
+	// var broker = "localhost"
+	// var port = 1883
+	// fmt.Println("Starting application")
 
 	// Initialize MQTT service
-	mqttService, err := NewMQTTClient(port, broker, "", "")
-	if err != nil {
-		panic(err)
-	}
+	// mqttService, err := NewMQTTClient(port, broker, "", "")
+	// if err != nil {
+	// 	panic(err)
+	// }
 
-	topic := "switch/message"
-	// Channel for receiving subscribed messages
-	respDataChan := make(chan []byte)
+	// topic := "switch/message"
+	// // Channel for receiving subscribed messages
+	// respDataChan := make(chan []byte)
 
-	// Start the subscription goroutine
-	go func() {
-		if err := mqttService.Subscribe(topic, respDataChan); err != nil {
-			fmt.Printf("Error subscribing: %v\n", err)
-		}
-	}()
+	// // Start the subscription goroutine
+	// go func() {
+	// 	if err := mqttService.Subscribe(topic, respDataChan); err != nil {
+	// 		fmt.Printf("Error subscribing: %v\n", err)
+	// 	}
+	// }()
 
 	// go func() {
 	// 	for {
@@ -420,7 +558,8 @@ func main() {
 	r := mux.NewRouter()
 	r.HandleFunc("/upload", uploadFile).Methods("POST")
 	r.HandleFunc("/list", listFiles).Methods("GET")
-	r.HandleFunc("/select/{version:[0-9.]+}/{imei:[0-9]+}", selectVersion).Methods("POST")
+	r.HandleFunc("/select/{version:[0-9.]+}/{imei:[0-9]+}/{filename}", selectVersion).Methods("POST")
+
 	r.HandleFunc("/{filename}/{version:[0-9.]+}/{imei}", serveFileWithProgress).Methods("GET")
 	r.HandleFunc("/delete/{filename}", deleteFile).Methods("DELETE")
 
@@ -434,12 +573,12 @@ func main() {
     )
 
     // Apply the CORS middleware
-    go http.ListenAndServe(":9000", corsOptions(r))
+     http.ListenAndServe(":9000", corsOptions(r))
 	log.Println("Listening on 9000...")
-	for msg := range respDataChan {
-		fmt.Printf("Received MQTT message: %s\n", string(msg))
-	}
-	close(respDataChan)
+	// for msg := range respDataChan {
+	// 	fmt.Printf("Received MQTT message: %s\n", string(msg))
+	// }
+	// close(respDataChan)
 }
 
 //send the flag with the imei,timestamp
